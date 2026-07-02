@@ -70,6 +70,15 @@ const COINIT_MULTITHREADED: u32 = 0x0;
 
 extern "ole32" fn CoInitializeEx(pv_reserved: ?*anyopaque, co_init: u32) callconv(.winapi) HRESULT;
 extern "ole32" fn CoUninitialize() callconv(.winapi) void;
+extern "ole32" fn CoTaskMemFree(pv: ?*anyopaque) callconv(.winapi) void;
+
+/// Frees a `CoTaskMemAlloc`'d buffer returned by the SDK (error messages,
+/// `WslcInspectContainer`'s JSON, `WslcListSessionImages`'s array,
+/// `WslcSessionAuthenticate`'s token, ...). Accepts any of the nullable
+/// pointer typedefs above (`PWSTR`, `PSTR`, `?[*]WslcImageInfo`, ...).
+pub fn freeTaskMem(ptr: anytype) void {
+    CoTaskMemFree(@ptrCast(ptr));
+}
 
 threadlocal var com_initialized: bool = false;
 
