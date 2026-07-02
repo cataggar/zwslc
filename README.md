@@ -103,3 +103,9 @@ call (and, for a container's init-process settings, apparently for the
 container's entire lifetime). See `docs/comptime-design.md` for how
 `packages/wslc` handles this with an arena whose lifetime is tied to the
 resulting handle wrapper, not the builder call.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). The underlying `Microsoft.WSL.Containers`
+NuGet package (`wslcsdk.h`/`.lib`/`.dll`, fetched at build time) is also
+MIT-licensed, from [`github.com/microsoft/WSL`](https://github.com/microsoft/WSL).

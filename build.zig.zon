@@ -20,5 +20,6 @@
         "tools",
         "docs",
         "README.md",
+        "LICENSE",
     },
 }
