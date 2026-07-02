@@ -104,6 +104,26 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
     run_cli_tests.addPathDir(sdk_native_dir);
 
+    // ---- samples/end_to_end: Zig port of Microsoft's documented C sample ----
+    const sample_exe = b.addExecutable(.{
+        .name = "end_to_end",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("samples/end_to_end/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "wslc", .module = wslc_mod },
+            },
+        }),
+    });
+    sample_exe.step.dependOn(&fetch_sdk.step);
+
+    const run_sample_cmd = b.addRunArtifact(sample_exe);
+    run_sample_cmd.addPathDir(sdk_native_dir);
+    if (b.args) |args| run_sample_cmd.addArgs(args);
+    const run_sample_step = b.step("run-sample", "Run the end-to-end sample (samples/end_to_end)");
+    run_sample_step.dependOn(&run_sample_cmd.step);
+
     // ---- aggregate test step ----
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_wslc_sys_tests.step);

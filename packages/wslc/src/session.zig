@@ -32,22 +32,34 @@ pub const SessionSettings = struct {
     vhd: ?VhdRequirements = null,
     feature_flags: sys.WslcSessionFeatureFlags = .NONE,
 
-    pub fn build(self: SessionSettings, allocator: std.mem.Allocator) sys.Error!sys.WslcSessionSettings {
+    /// **Important**: the WSLC SDK does **not** deep-copy the strings passed
+    /// to `WslcInitSessionSettings`/`WslcSetSessionSettingsVhd` at call time —
+    /// it appears to retain the pointers and only dereference them later, at
+    /// `WslcCreateSession` time (confirmed empirically: freeing these buffers
+    /// right after `build()` returns caused `WslcCreateSession` to fail with
+    /// `E_INVALIDARG` and a garbled "Path is not absolute" error message).
+    /// So `allocator` here **must** keep everything alive at least until the
+    /// caller's subsequent `WslcCreateSession` call completes — pass an
+    /// arena and `deinit()` it only *after* that call, as `Session.create`
+    /// does; don't free individual allocations from inside `build()`.
+    pub fn build(self: SessionSettings, allocator: std.mem.Allocator, out: *sys.WslcSessionSettings) sys.Error!void {
         const name_w = strings.wideZ(allocator, self.name) catch return error.OutOfMemory;
-        defer allocator.free(name_w);
         const storage_w = strings.wideZ(allocator, self.storage_path) catch return error.OutOfMemory;
-        defer allocator.free(storage_w);
 
-        var raw: sys.WslcSessionSettings = undefined;
-        try sys.ok(sys.WslcInitSessionSettings(name_w.ptr, storage_w.ptr, &raw));
+        // Built directly into `out` (never copied to a different address in
+        // between calls): WslcCreateSession returned E_INVALIDARG when an
+        // earlier version of this code built the blob in a temporary and
+        // returned it *by value*, which is consistent with the SDK expecting
+        // the settings blob to stay at a stable address across the whole
+        // Init/Set*/Create sequence.
+        try sys.ok(sys.WslcInitSessionSettings(name_w.ptr, storage_w.ptr, out));
 
-        if (self.cpu_count) |c| try sys.ok(sys.WslcSetSessionSettingsCpuCount(&raw, c));
-        if (self.memory_mb) |m| try sys.ok(sys.WslcSetSessionSettingsMemory(&raw, m));
-        if (self.timeout_ms) |t| try sys.ok(sys.WslcSetSessionSettingsTimeout(&raw, t));
+        if (self.cpu_count) |c| try sys.ok(sys.WslcSetSessionSettingsCpuCount(out, c));
+        if (self.memory_mb) |m| try sys.ok(sys.WslcSetSessionSettingsMemory(out, m));
+        if (self.timeout_ms) |t| try sys.ok(sys.WslcSetSessionSettingsTimeout(out, t));
 
         if (self.vhd) |vhd| {
             const vhd_name_z = strings.narrowZ(allocator, vhd.name) catch return error.OutOfMemory;
-            defer allocator.free(vhd_name_z);
             var raw_vhd: sys.WslcVhdRequirements = .{
                 .name = vhd_name_z.ptr,
                 .sizeBytes = vhd.size_bytes,
@@ -56,14 +68,12 @@ pub const SessionSettings = struct {
                 .uid = vhd.uid,
                 .gid = vhd.gid,
             };
-            try sys.ok(sys.WslcSetSessionSettingsVhd(&raw, &raw_vhd));
+            try sys.ok(sys.WslcSetSessionSettingsVhd(out, &raw_vhd));
         }
 
         if (self.feature_flags != .NONE) {
-            try sys.ok(sys.WslcSetSessionSettingsFeatureFlags(&raw, self.feature_flags));
+            try sys.ok(sys.WslcSetSessionSettingsFeatureFlags(out, self.feature_flags));
         }
-
-        return raw;
     }
 };
 
@@ -72,7 +82,14 @@ pub const Session = struct {
 
     pub fn create(allocator: std.mem.Allocator, settings: SessionSettings) sys.Error!Session {
         try sys.ensureComInitialized();
-        var raw = try settings.build(allocator);
+        // See `SessionSettings.build`'s doc comment: the temporary strings it
+        // allocates must outlive `WslcCreateSession`, not just `build()`
+        // itself, so we use an arena and only tear it down after the call.
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        var raw: sys.WslcSessionSettings = undefined;
+        try settings.build(arena.allocator(), &raw);
 
         var handle: sys.Session = null;
         var err_msg: sys.PWSTR = null;
@@ -103,7 +120,11 @@ pub const Session = struct {
     }
 
     pub fn createContainer(self: Session, allocator: std.mem.Allocator, settings: ContainerSettings) sys.Error!Container {
-        var raw = try settings.build(allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        var raw: sys.WslcContainerSettings = undefined;
+        try settings.build(arena.allocator(), &raw);
         var handle: sys.Container = null;
         var err_msg: sys.PWSTR = null;
         const hr = sys.WslcCreateContainer(self.handle, &raw, &handle, &err_msg);
@@ -183,6 +204,8 @@ pub const Session = struct {
 
 test "SessionSettings.build sequences Init + optional setters correctly" {
     try sys.ensureComInitialized();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
     const settings = SessionSettings{
         .name = "test-session",
         .storage_path = "C:\\wslc-test",
@@ -190,5 +213,6 @@ test "SessionSettings.build sequences Init + optional setters correctly" {
         .memory_mb = 2048,
         .feature_flags = .ENABLE_GPU,
     };
-    _ = try settings.build(std.testing.allocator);
+    var raw: sys.WslcSessionSettings = undefined;
+    try settings.build(arena.allocator(), &raw);
 }

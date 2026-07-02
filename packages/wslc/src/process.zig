@@ -86,35 +86,39 @@ pub const ProcessSettings = struct {
     callbacks: ?sys.WslcProcessCallbacks = null,
     callbacks_context: ?*anyopaque = null,
 
-    /// Owns temporary allocations (null-terminated string copies) needed to
-    /// call the raw `Wslc*` builder functions; freed before returning.
-    pub fn build(self: ProcessSettings, allocator: std.mem.Allocator) sys.Error!sys.WslcProcessSettings {
-        var raw: sys.WslcProcessSettings = undefined;
-        try sys.ok(sys.WslcInitProcessSettings(&raw));
+    /// See `SessionSettings.build`'s doc comment in `session.zig`: the WSLC
+    /// SDK retains string/array/struct pointers rather than copying them at
+    /// Init/Set time, so `allocator` must keep everything alive at least
+    /// until the caller's subsequent Create call completes (or, when this is
+    /// used as a container's `init_process`, until *that* container's
+    /// `WslcCreateContainer` completes) — pass an arena and `deinit()` it
+    /// only *after* that call. Nothing here is freed by `build()` itself,
+    /// and `self.callbacks` (if set) is copied into an arena allocation
+    /// rather than passed as `&self.callbacks`, since `self` itself lives in
+    /// this function's own stack frame and would go out of scope too early.
+    pub fn build(self: ProcessSettings, allocator: std.mem.Allocator, out: *sys.WslcProcessSettings) sys.Error!void {
+        try sys.ok(sys.WslcInitProcessSettings(out));
 
         if (self.working_directory) |wd| {
             const wd_z = strings.narrowZ(allocator, wd) catch return error.OutOfMemory;
-            defer allocator.free(wd_z);
-            try sys.ok(sys.WslcSetProcessSettingsWorkingDirectory(&raw, wd_z.ptr));
+            try sys.ok(sys.WslcSetProcessSettingsWorkingDirectory(out, wd_z.ptr));
         }
 
         {
-            var argv = strings.narrowZArray(allocator, self.cmd_line) catch return error.OutOfMemory;
-            defer argv.deinit(allocator);
-            try sys.ok(sys.WslcSetProcessSettingsCmdLine(&raw, argv.ptrs.ptr, argv.ptrs.len));
+            const argv = strings.narrowZArray(allocator, self.cmd_line) catch return error.OutOfMemory;
+            try sys.ok(sys.WslcSetProcessSettingsCmdLine(out, argv.ptrs.ptr, argv.ptrs.len));
         }
 
         if (self.env_variables.len != 0) {
-            var envs = strings.narrowZArray(allocator, self.env_variables) catch return error.OutOfMemory;
-            defer envs.deinit(allocator);
-            try sys.ok(sys.WslcSetProcessSettingsEnvVariables(&raw, envs.ptrs.ptr, envs.ptrs.len));
+            const envs = strings.narrowZArray(allocator, self.env_variables) catch return error.OutOfMemory;
+            try sys.ok(sys.WslcSetProcessSettingsEnvVariables(out, envs.ptrs.ptr, envs.ptrs.len));
         }
 
-        if (self.callbacks) |*cbs| {
-            try sys.ok(sys.WslcSetProcessSettingsCallbacks(&raw, cbs, self.callbacks_context));
+        if (self.callbacks) |cbs| {
+            const cbs_ptr = allocator.create(sys.WslcProcessCallbacks) catch return error.OutOfMemory;
+            cbs_ptr.* = cbs;
+            try sys.ok(sys.WslcSetProcessSettingsCallbacks(out, cbs_ptr, self.callbacks_context));
         }
-
-        return raw;
     }
 };
 
@@ -149,8 +153,11 @@ pub fn exitCallback(
 
 test "ProcessSettings.build sequences Init + CmdLine correctly" {
     try sys.ensureComInitialized();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
     const settings = ProcessSettings{ .cmd_line = &.{ "/bin/echo", "hi" } };
-    _ = try settings.build(std.testing.allocator);
+    var raw: sys.WslcProcessSettings = undefined;
+    try settings.build(arena.allocator(), &raw);
 }
 
 test "stdioCallback/exitCallback trampolines forward to the typed handler" {

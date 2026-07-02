@@ -44,47 +44,52 @@ pub const ContainerSettings = struct {
     volumes: []const Volume = &.{},
     named_volumes: []const NamedVolume = &.{},
 
-    pub fn build(self: ContainerSettings, allocator: std.mem.Allocator) sys.Error!sys.WslcContainerSettings {
+    /// See `SessionSettings.build`'s doc comment in `session.zig`: the WSLC
+    /// SDK retains string/array pointers rather than copying them at
+    /// Init/Set time, so `allocator` must keep everything alive at least
+    /// until the caller's subsequent `WslcCreateContainer` call completes —
+    /// pass an arena and `deinit()` it only *after* that call, as
+    /// `Session.createContainer` does. Nothing here is freed by `build()`
+    /// itself.
+    pub fn build(self: ContainerSettings, allocator: std.mem.Allocator, out: *sys.WslcContainerSettings) sys.Error!void {
         const image_name_z = strings.narrowZ(allocator, self.image_name) catch return error.OutOfMemory;
-        defer allocator.free(image_name_z);
 
-        var raw: sys.WslcContainerSettings = undefined;
-        try sys.ok(sys.WslcInitContainerSettings(image_name_z.ptr, &raw));
+        // Built directly into `out` throughout (see the comment in
+        // session.zig's SessionSettings.build for why we don't build in a
+        // temporary and copy/return by value).
+        try sys.ok(sys.WslcInitContainerSettings(image_name_z.ptr, out));
 
         if (self.name) |n| {
             const n_z = strings.narrowZ(allocator, n) catch return error.OutOfMemory;
-            defer allocator.free(n_z);
-            try sys.ok(sys.WslcSetContainerSettingsName(&raw, n_z.ptr));
+            try sys.ok(sys.WslcSetContainerSettingsName(out, n_z.ptr));
         }
 
         if (self.init_process) |init_proc| {
-            var raw_init_proc = try init_proc.build(allocator);
-            try sys.ok(sys.WslcSetContainerSettingsInitProcess(&raw, &raw_init_proc));
+            const raw_init_proc = allocator.create(sys.WslcProcessSettings) catch return error.OutOfMemory;
+            try init_proc.build(allocator, raw_init_proc);
+            try sys.ok(sys.WslcSetContainerSettingsInitProcess(out, raw_init_proc));
         }
 
         if (self.networking_mode) |mode| {
-            try sys.ok(sys.WslcSetContainerSettingsNetworkingMode(&raw, mode));
+            try sys.ok(sys.WslcSetContainerSettingsNetworkingMode(out, mode));
         }
 
         if (self.host_name) |h| {
             const h_z = strings.narrowZ(allocator, h) catch return error.OutOfMemory;
-            defer allocator.free(h_z);
-            try sys.ok(sys.WslcSetContainerSettingsHostName(&raw, h_z.ptr));
+            try sys.ok(sys.WslcSetContainerSettingsHostName(out, h_z.ptr));
         }
 
         if (self.domain_name) |d| {
             const d_z = strings.narrowZ(allocator, d) catch return error.OutOfMemory;
-            defer allocator.free(d_z);
-            try sys.ok(sys.WslcSetContainerSettingsDomainName(&raw, d_z.ptr));
+            try sys.ok(sys.WslcSetContainerSettingsDomainName(out, d_z.ptr));
         }
 
         if (self.flags != .NONE) {
-            try sys.ok(sys.WslcSetContainerSettingsFlags(&raw, self.flags));
+            try sys.ok(sys.WslcSetContainerSettingsFlags(out, self.flags));
         }
 
         if (self.port_mappings.len != 0) {
             const raw_mappings = allocator.alloc(sys.WslcContainerPortMapping, self.port_mappings.len) catch return error.OutOfMemory;
-            defer allocator.free(raw_mappings);
             for (self.port_mappings, 0..) |m, i| {
                 raw_mappings[i] = .{
                     .windowsPort = m.windows_port,
@@ -93,64 +98,36 @@ pub const ContainerSettings = struct {
                     .windowsAddress = null,
                 };
             }
-            try sys.ok(sys.WslcSetContainerSettingsPortMappings(&raw, raw_mappings.ptr, @intCast(raw_mappings.len)));
+            try sys.ok(sys.WslcSetContainerSettingsPortMappings(out, raw_mappings.ptr, @intCast(raw_mappings.len)));
         }
 
         if (self.volumes.len != 0) {
-            var owned_windows = std.array_list.Managed([:0]u16).init(allocator);
-            defer {
-                for (owned_windows.items) |s| allocator.free(s);
-                owned_windows.deinit();
-            }
-            var owned_container = std.array_list.Managed([:0]u8).init(allocator);
-            defer {
-                for (owned_container.items) |s| allocator.free(s);
-                owned_container.deinit();
-            }
             const raw_volumes = allocator.alloc(sys.WslcContainerVolume, self.volumes.len) catch return error.OutOfMemory;
-            defer allocator.free(raw_volumes);
             for (self.volumes, 0..) |v, i| {
                 const wp = strings.wideZ(allocator, v.windows_path) catch return error.OutOfMemory;
-                owned_windows.append(wp) catch return error.OutOfMemory;
                 const cp = strings.narrowZ(allocator, v.container_path) catch return error.OutOfMemory;
-                owned_container.append(cp) catch return error.OutOfMemory;
                 raw_volumes[i] = .{
                     .windowsPath = wp.ptr,
                     .containerPath = cp.ptr,
                     .readOnly = sys.boolToWin32(v.read_only),
                 };
             }
-            try sys.ok(sys.WslcSetContainerSettingsVolumes(&raw, raw_volumes.ptr, @intCast(raw_volumes.len)));
+            try sys.ok(sys.WslcSetContainerSettingsVolumes(out, raw_volumes.ptr, @intCast(raw_volumes.len)));
         }
 
         if (self.named_volumes.len != 0) {
-            var owned_names = std.array_list.Managed([:0]u8).init(allocator);
-            defer {
-                for (owned_names.items) |s| allocator.free(s);
-                owned_names.deinit();
-            }
-            var owned_paths = std.array_list.Managed([:0]u8).init(allocator);
-            defer {
-                for (owned_paths.items) |s| allocator.free(s);
-                owned_paths.deinit();
-            }
             const raw_named = allocator.alloc(sys.WslcContainerNamedVolume, self.named_volumes.len) catch return error.OutOfMemory;
-            defer allocator.free(raw_named);
             for (self.named_volumes, 0..) |v, i| {
                 const n = strings.narrowZ(allocator, v.name) catch return error.OutOfMemory;
-                owned_names.append(n) catch return error.OutOfMemory;
                 const cp = strings.narrowZ(allocator, v.container_path) catch return error.OutOfMemory;
-                owned_paths.append(cp) catch return error.OutOfMemory;
                 raw_named[i] = .{
                     .name = n.ptr,
                     .containerPath = cp.ptr,
                     .readOnly = sys.boolToWin32(v.read_only),
                 };
             }
-            try sys.ok(sys.WslcSetContainerSettingsNamedVolumes(&raw, raw_named.ptr, @intCast(raw_named.len)));
+            try sys.ok(sys.WslcSetContainerSettingsNamedVolumes(out, raw_named.ptr, @intCast(raw_named.len)));
         }
-
-        return raw;
     }
 };
 
@@ -209,7 +186,11 @@ pub const Container = struct {
     }
 
     pub fn createProcess(self: Container, allocator: std.mem.Allocator, settings: ProcessSettings) sys.Error!Process {
-        var raw = try settings.build(allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        var raw: sys.WslcProcessSettings = undefined;
+        try settings.build(arena.allocator(), &raw);
         var h: sys.Process = null;
         var err_msg: sys.PWSTR = null;
         const hr = sys.WslcCreateContainerProcess(self.handle, &raw, &h, &err_msg);
@@ -227,6 +208,8 @@ pub const Container = struct {
 
 test "ContainerSettings.build sequences Init + optional setters correctly" {
     try sys.ensureComInitialized();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
     const settings = ContainerSettings{
         .image_name = "alpine:latest",
         .name = "test-container",
@@ -236,5 +219,6 @@ test "ContainerSettings.build sequences Init + optional setters correctly" {
         .named_volumes = &.{.{ .name = "cache", .container_path = "/cache" }},
         .port_mappings = &.{.{ .windows_port = 8080, .container_port = 80 }},
     };
-    _ = try settings.build(std.testing.allocator);
+    var raw: sys.WslcContainerSettings = undefined;
+    try settings.build(arena.allocator(), &raw);
 }
