@@ -120,8 +120,17 @@ pub const Session = struct {
     }
 
     pub fn createContainer(self: Session, allocator: std.mem.Allocator, settings: ContainerSettings) sys.Error!Container {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
+        // See `Container.settings_arena`'s doc comment: this arena must
+        // outlive the container (WSLC appears to retain the init process's
+        // callbacks pointer for the whole container lifetime, not just
+        // through `WslcCreateContainer`), so it's handed off to the returned
+        // `Container` rather than deinit-ed here.
+        const arena = allocator.create(std.heap.ArenaAllocator) catch return error.OutOfMemory;
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+        errdefer {
+            arena.deinit();
+            allocator.destroy(arena);
+        }
 
         var raw: sys.WslcContainerSettings = undefined;
         try settings.build(arena.allocator(), &raw);
@@ -130,7 +139,7 @@ pub const Session = struct {
         const hr = sys.WslcCreateContainer(self.handle, &raw, &handle, &err_msg);
         sys.freeTaskMem(err_msg);
         try sys.ok(hr);
-        return .{ .handle = handle };
+        return .{ .handle = handle, .settings_arena = arena };
     }
 
     pub fn pullImage(self: Session, uri: []const u8, options: struct {

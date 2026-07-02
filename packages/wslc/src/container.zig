@@ -133,6 +133,14 @@ pub const ContainerSettings = struct {
 
 pub const Container = struct {
     handle: sys.Container,
+    /// Owns the arena backing this container's `init_process` settings
+    /// (including any registered callbacks) — see `Session.createContainer`.
+    /// Must outlive the container, not just its creation, since WSLC appears
+    /// to retain the callbacks pointer for the process's whole lifetime, not
+    /// just through `WslcCreateContainer`. `null` for `Process`/`Container`
+    /// wrappers around an already-existing handle (e.g. from `initProcess()`)
+    /// that don't own any settings memory themselves.
+    settings_arena: ?*std.heap.ArenaAllocator = null,
 
     pub fn start(self: Container, flags: sys.WslcContainerStartFlags) sys.Error!void {
         var err_msg: sys.PWSTR = null;
@@ -186,8 +194,15 @@ pub const Container = struct {
     }
 
     pub fn createProcess(self: Container, allocator: std.mem.Allocator, settings: ProcessSettings) sys.Error!Process {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
+        // See `settings_arena`'s doc comment: this arena must outlive the
+        // *process*, not just this function, so we hand it off to the
+        // returned `Process` rather than deinit-ing it here.
+        const arena = allocator.create(std.heap.ArenaAllocator) catch return error.OutOfMemory;
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+        errdefer {
+            arena.deinit();
+            allocator.destroy(arena);
+        }
 
         var raw: sys.WslcProcessSettings = undefined;
         try settings.build(arena.allocator(), &raw);
@@ -196,13 +211,21 @@ pub const Container = struct {
         const hr = sys.WslcCreateContainerProcess(self.handle, &raw, &h, &err_msg);
         sys.freeTaskMem(err_msg);
         try sys.ok(hr);
-        return .{ .handle = h };
+        return .{ .handle = h, .settings_arena = arena };
     }
 
-    /// Releases the local reference to this container. Does not stop/delete it.
+    /// Releases the local reference to this container (and, if this
+    /// `Container` owns one, its settings arena — see `settings_arena`).
+    /// Does not stop/delete the container itself.
     pub fn deinit(self: *Container) void {
         _ = sys.WslcReleaseContainer(self.handle);
         self.handle = null;
+        if (self.settings_arena) |arena| {
+            const child = arena.child_allocator;
+            arena.deinit();
+            child.destroy(arena);
+            self.settings_arena = null;
+        }
     }
 };
 

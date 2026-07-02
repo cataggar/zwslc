@@ -17,6 +17,14 @@ const strings = @import("strings.zig");
 
 pub const Process = struct {
     handle: sys.Process,
+    /// Owns the arena backing this process's settings (including any
+    /// registered callbacks), if this `Process` was created via
+    /// `Container.createProcess` — must outlive the process itself, since
+    /// WSLC appears to retain the callbacks pointer for the process's whole
+    /// lifetime, not just through `WslcCreateContainerProcess`. `null` for a
+    /// `Process` wrapping an already-existing handle (e.g. a container's
+    /// `initProcess()`, whose settings arena is owned by the `Container`).
+    settings_arena: ?*std.heap.ArenaAllocator = null,
 
     pub fn pid(self: Process) sys.Error!u32 {
         var v: u32 = 0;
@@ -62,10 +70,18 @@ pub const Process = struct {
         return h;
     }
 
-    /// Releases the local reference to this process. Does not stop it.
+    /// Releases the local reference to this process (and, if this
+    /// `Process` owns one, its settings arena — see `settings_arena`). Does
+    /// not stop it.
     pub fn deinit(self: *Process) void {
         _ = sys.WslcReleaseProcess(self.handle);
         self.handle = null;
+        if (self.settings_arena) |arena| {
+            const child = arena.child_allocator;
+            arena.deinit();
+            child.destroy(arena);
+            self.settings_arena = null;
+        }
     }
 };
 
