@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(arena);
 
-    const exit_code = run(gpa, arena, init.environ_map, argv[1..]) catch |err| {
+    const exit_code = run(gpa, arena, init.io, init.environ_map, argv[1..]) catch |err| {
         std.debug.print("zwslc: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
@@ -67,7 +67,7 @@ fn createOne(arena: std.mem.Allocator, path: []const u8) !void {
     _ = CreateDirectoryW(path_w.ptr, null);
 }
 
-fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const std.process.Environ.Map, args: []const []const u8) !u8 {
+fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, environ: *const std.process.Environ.Map, args: []const []const u8) !u8 {
     if (args.len == 0) {
         printUsage();
         return 1;
@@ -79,7 +79,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const std.pro
 
     if (eq(cmd, "run")) return container_cmds.run(gpa, arena, environ, rest);
     if (eq(cmd, "pull")) return image_cmds.pull(gpa, arena, environ, rest);
-    if (eq(cmd, "images")) return image_cmds.list(gpa, arena, environ, rest);
+    if (eq(cmd, "images")) return image_cmds.list(gpa, arena, io, environ, rest);
     if (eq(cmd, "rmi")) return image_cmds.remove(gpa, arena, environ, rest);
     if (eq(cmd, "tag")) return image_cmds.tag(gpa, arena, environ, rest);
     if (eq(cmd, "push")) return image_cmds.push(gpa, arena, environ, rest);
@@ -104,7 +104,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const std.pro
         const sub = rest[0];
         const sub_rest = rest[1..];
         if (eq(sub, "pull")) return image_cmds.pull(gpa, arena, environ, sub_rest);
-        if (eq(sub, "list") or eq(sub, "ls") or eq(sub, "images")) return image_cmds.list(gpa, arena, environ, sub_rest);
+        if (eq(sub, "list") or eq(sub, "ls") or eq(sub, "images")) return image_cmds.list(gpa, arena, io, environ, sub_rest);
         if (eq(sub, "tag")) return image_cmds.tag(gpa, arena, environ, sub_rest);
         if (eq(sub, "push")) return image_cmds.push(gpa, arena, environ, sub_rest);
         if (eq(sub, "rm") or eq(sub, "rmi") or eq(sub, "delete")) return image_cmds.remove(gpa, arena, environ, sub_rest);
@@ -158,4 +158,15 @@ fn printUsage() void {
 
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+
+test {
+    // `zig test` replaces this file's `main` and never calls it, so
+    // without this, nothing here (or in container_cmds.zig/image_cmds.zig/
+    // format.zig, all only reachable *from* `run()`/`main()`) would ever be
+    // analyzed - silently discarding their `test` blocks too. Confirmed
+    // empirically: format.zig's tests were compiled in but never executed
+    // until this was added (a deliberately-broken assertion there stayed
+    // green with this block missing).
+    std.testing.refAllDecls(@This());
 }
