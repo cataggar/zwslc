@@ -23,6 +23,11 @@ no API to list/reopen containers created by a prior process"). The WSL
 container SDK itself still has no such API; this server's registry, not the
 SDK, provides that continuity, and only within this one server process.
 
+`zwslc-mcp` uses the **same session storage as the real `wslc.exe` CLI**
+(`%LOCALAPPDATA%\wslc\sessions\wslc-cli-<username>`), so its image/container
+tools see and share the exact same images as the real tool and `zwslc`
+itself - not a third, disconnected image store.
+
 ## Running it
 
 ```

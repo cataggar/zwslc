@@ -57,18 +57,23 @@ pub const AppContext = struct {
     }
 };
 
-/// Resolves the fixed, per-machine session storage directory
-/// (`%LOCALAPPDATA%\zwslc-mcp\storage`) and creates a `wslc.Session` against
-/// it. Mirrors `cli/src/main.zig`'s `defaultSession`, with its own storage
-/// path (`zwslc-mcp` rather than `zwslc`) so the MCP server's images/
-/// containers don't collide with the CLI's.
+/// Resolves the **same** session storage directory the real `wslc.exe` CLI
+/// uses for its default session
+/// (`%LOCALAPPDATA%\wslc\sessions\wslc-cli-<username>` - confirmed by
+/// inspecting that directory after running the real `wslc.exe images`;
+/// mirrors the identical change in `cli/src/main.zig`'s `defaultSession`)
+/// and creates a `wslc.Session` against it, so the MCP server's image/
+/// container tools see and share the exact same images as the real tool
+/// (and zwslc's own CLI) instead of maintaining a third, disconnected image
+/// store.
 fn defaultSession(gpa: std.mem.Allocator, environ: *const std.process.Environ.Map) !wslc.Session {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     const local_app_data = environ.get("LOCALAPPDATA") orelse return error.LocalAppDataNotSet;
-    const storage_path = try std.fmt.allocPrint(arena, "{s}\\zwslc-mcp\\storage", .{local_app_data});
+    const username = environ.get("USERNAME") orelse return error.UsernameNotSet;
+    const storage_path = try std.fmt.allocPrint(arena, "{s}\\wslc\\sessions\\wslc-cli-{s}", .{ local_app_data, username });
     try createDirectoryRecursive(arena, storage_path);
 
     return wslc.Session.create(gpa, .{

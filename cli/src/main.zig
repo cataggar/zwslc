@@ -29,21 +29,37 @@ pub fn main(init: std.process.Init) !void {
     std.process.exit(exit_code);
 }
 
-/// Resolves the fixed, per-machine session storage directory
-/// (`%LOCALAPPDATA%\zwslc\storage`) and creates a `wslc.Session` against it.
-/// Since WSLC images are durably stored under this path, `image` commands
-/// see the same images across separate CLI invocations even though a new
-/// `WslcSession` is created every time.
+/// Resolves the **same** session storage directory the real `wslc.exe` CLI
+/// uses for its default session
+/// (`%LOCALAPPDATA%\wslc\sessions\wslc-cli-<username>` - confirmed by
+/// inspecting that directory after running the real `wslc.exe images`) and
+/// creates a `wslc.Session` against it, so `zwslc pull`/`images`/etc. see
+/// and share the exact same images as the real tool, instead of maintaining
+/// a separate, disconnected image store. Since WSLC images are durably
+/// stored under this path, `image` commands see the same images across
+/// separate CLI invocations (zwslc's own or the real wslc.exe's) even
+/// though a new `WslcSession` is created every time.
 pub fn defaultSession(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const std.process.Environ.Map) !wslc.Session {
     const local_app_data = environ.get("LOCALAPPDATA") orelse return error.LocalAppDataNotSet;
-    const storage_path = try std.fmt.allocPrint(arena, "{s}\\zwslc\\storage", .{local_app_data});
+    const username = environ.get("USERNAME") orelse return error.UsernameNotSet;
+    const storage_path = try std.fmt.allocPrint(arena, "{s}\\wslc\\sessions\\wslc-cli-{s}", .{ local_app_data, username });
     try createDirectoryRecursive(arena, storage_path);
 
     return wslc.Session.create(gpa, .{
         .name = "zwslc-default",
         .storage_path = storage_path,
     }) catch |err| {
-        std.debug.print("zwslc: failed to create session (storage_path={s}): {s}\n", .{ storage_path, @errorName(err) });
+        if (err == error.SharingViolation) {
+            std.debug.print(
+                "zwslc: the WSL container session storage is in use by another process " ++
+                    "(e.g. a 'wslc' session left running in the background - real wslc.exe " ++
+                    "keeps its VM warm after use). Wait a moment and try again, or run " ++
+                    "'wslc system session terminate' to free it.\n",
+                .{},
+            );
+        } else {
+            std.debug.print("zwslc: failed to create session (storage_path={s}): {s}\n", .{ storage_path, @errorName(err) });
+        }
         return err;
     };
 }
