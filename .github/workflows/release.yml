@@ -142,13 +142,8 @@ jobs:
             **Install:**
 
             ```
-            ghr install cataggar/zwslc@v${{ steps.version.outputs.version }} REPLACE_WITH_MINISIGN_PUBLIC_KEY
+            ghr install cataggar/zwslc@v${{ steps.version.outputs.version }} RWT2wp6Q5BroB9dEh2Y5zRtU6q6C/XaXx4NUeQ31MwL6N7Wk3Yg6BWV9
             ```
-
-            <!-- TODO: replace REPLACE_WITH_MINISIGN_PUBLIC_KEY above with the
-                 real minisign public key once it's generated (`minisign -G -W`)
-                 and the secret key is stored in the MINISIGN_SECRET_KEY repo
-                 secret - see the release plan's "release-minisign-key" step. -->
           files: |
             zwslc-*.tar.gz
             zwslc-*.tar.xz
