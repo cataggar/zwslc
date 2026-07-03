@@ -2,12 +2,12 @@
 //! container SDK (`packages/wslc`) as structured tools for AI agents.
 //!
 //! Unlike the stateless `zwslc` CLI, this is a long-lived process, so it can
-//! hold an in-memory registry of containers/processes across tool calls
-//! within a single server session, which is what finally makes
-//! `container_status`/`container_logs`/`stop_container` work meaningfully
-//! (see GitHub issue #2 for the full design rationale). Tools are registered
-//! incrementally as they're implemented; this scaffold starts a server with
-//! none yet.
+//! hold an in-memory registry of containers across tool calls within a
+//! single server session, which is what finally makes `container_status`/
+//! `container_logs`/`stop_container`/`delete_container` work meaningfully
+//! (see GitHub issue #2 and docs/mcp-server.md for the full design
+//! rationale, tool reference, safety-boundary note, and registry-lifetime
+//! caveats).
 
 const std = @import("std");
 const mcp = @import("mcp");
@@ -26,15 +26,16 @@ pub fn main(init: std.process.Init) !void {
     });
     defer server.deinit();
 
+    // `ctx.deinit()` (registry + lazily-created session cleanup) runs on
+    // any clean shutdown - see docs/mcp-server.md's "Registry lifetime and
+    // cleanup" section for exactly what is/isn't cleaned up, and why a hard
+    // crash (not a clean exit) can still orphan containers.
     var ctx = AppContext.init(init.gpa, init.environ_map);
     defer ctx.deinit();
 
     try version_tools.register(&server);
     try image_tools.register(&server, &ctx);
     try container_tools.register(&server, &ctx);
-    // TODO(#2): register detached create/start/status/stop/delete + logs/exec
-    // container tools here as they land (passing `&ctx` for session/registry
-    // access).
 
     try server.run(init.io, init.gpa, .stdio);
 }

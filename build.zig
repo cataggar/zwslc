@@ -136,6 +136,22 @@ pub fn build(b: *std.Build) void {
     const run_mcp_tests = b.addRunArtifact(mcp_tests);
     run_mcp_tests.addPathDir(sdk_native_dir);
 
+    // ---- smoke-test-mcp: black-box STDIO test of the *installed* zwslc-mcp.exe ----
+    // Unlike `mcp_tests` above (a `zig test` binary compiled from the same
+    // source, exercising Zig-level unit tests), this spawns the real
+    // installed executable as a subprocess and talks real JSON-RPC over its
+    // STDIO transport - the same way an actual MCP client would. See
+    // tools/smoke-test-mcp.ps1 for why this is PowerShell rather than Zig
+    // (avoids depending on Zig 0.16's still-evolving std.Io subprocess API
+    // for a test that's inherently just "does the real binary work").
+    const smoke_test_mcp = b.addSystemCommand(&.{ "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File" });
+    smoke_test_mcp.addFileArg(b.path("tools/smoke-test-mcp.ps1"));
+    smoke_test_mcp.addArg("-ExePath");
+    smoke_test_mcp.addArg(b.getInstallPath(.bin, "zwslc-mcp.exe"));
+    smoke_test_mcp.step.dependOn(b.getInstallStep());
+    const smoke_test_mcp_step = b.step("smoke-test-mcp", "Spawn the installed zwslc-mcp.exe and verify its tools/list over real STDIO");
+    smoke_test_mcp_step.dependOn(&smoke_test_mcp.step);
+
     // ---- samples/end_to_end: Zig port of Microsoft's documented C sample ----
     const sample_exe = b.addExecutable(.{
         .name = "end_to_end",
