@@ -3,6 +3,7 @@
 const std = @import("std");
 const wslc = @import("wslc");
 const main = @import("main.zig");
+const format = @import("format.zig");
 
 pub fn pull(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const std.process.Environ.Map, args: []const []const u8) !u8 {
     if (args.len == 0) {
@@ -22,7 +23,7 @@ pub fn pull(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const st
     return 0;
 }
 
-pub fn list(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const std.process.Environ.Map, args: []const []const u8) !u8 {
+pub fn list(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, environ: *const std.process.Environ.Map, args: []const []const u8) !u8 {
     _ = args;
     var session = main.defaultSession(gpa, arena, environ) catch return 1;
     defer session.deinit();
@@ -33,19 +34,36 @@ pub fn list(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ: *const st
     };
     defer gpa.free(images);
 
-    std.debug.print("{s: <40} {s: <12} {s: <10}\n", .{ "NAME", "SIZE", "SHA256" });
+    const now_seconds = std.Io.Clock.real.now(io).toSeconds();
+
+    var rows = std.array_list.Managed([5][]const u8).init(arena);
     for (images) |img| {
         const name_len = std.mem.indexOfScalar(u8, &img.name, 0) orelse img.name.len;
-        const size: u64 = @intCast(@max(0, img.sizeBytes));
-        std.debug.print("{s: <40} {d: <12} {x}{x}{x}{x}...\n", .{
-            img.name[0..name_len],
-            size,
-            img.sha256[0],
-            img.sha256[1],
-            img.sha256[2],
-            img.sha256[3],
-        });
+        const name = img.name[0..name_len];
+        const repo_tag = format.splitRepoTag(name);
+        // `img` is a by-value loop copy whose storage is reused by the next
+        // iteration, so repo/tag (slices into img.name) must be duped into
+        // the arena now, not just appended - otherwise every row but the
+        // last ends up reading whatever the *final* iteration overwrote
+        // that memory with (confirmed empirically: a 2-image list showed
+        // the first row's REPOSITORY/TAG as garbled substrings of the
+        // second image's name).
+        const repo = try arena.dupe(u8, repo_tag.repo);
+        const tag_value = try arena.dupe(u8, repo_tag.tag);
+
+        const image_id = try arena.dupe(u8, &std.fmt.bytesToHex(img.sha256[0..6].*, .lower));
+
+        var size_buf: [32]u8 = undefined;
+        const size = try arena.dupe(u8, format.humanSize(&size_buf, img.sizeBytes));
+
+        var age_buf: [32]u8 = undefined;
+        const elapsed = now_seconds - @as(i64, @intCast(img.createdUnixTime));
+        const created = try arena.dupe(u8, format.humanDurationAgo(&age_buf, elapsed));
+
+        try rows.append(.{ repo, tag_value, image_id, created, size });
     }
+
+    format.printTable(5, .{ "REPOSITORY", "TAG", "IMAGE ID", "CREATED", "SIZE" }, rows.items);
     return 0;
 }
 
