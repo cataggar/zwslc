@@ -53,9 +53,20 @@ $psi.RedirectStandardError = $true
 $psi.UseShellExecute = $false
 $proc = [System.Diagnostics.Process]::Start($psi)
 
+# Wrap stdin with an explicit, BOM-less UTF-8 StreamWriter: relying on
+# ProcessStartInfo's default input encoding is not reliable across
+# PowerShell versions/OS locales (StandardInputEncoding also isn't even
+# available on Windows PowerShell 5.1's older .NET Framework) - a stray BOM
+# prepended to the first written line is valid JSON to some parsers but not
+# others, and was observed causing a real JSON-RPC "Parse error" response
+# on a GitHub-hosted Windows runner (never reproduced locally) before this
+# fix.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$stdin = New-Object System.IO.StreamWriter($proc.StandardInput.BaseStream, $utf8NoBom)
+$stdin.AutoFlush = $true
+
 function Send-Request([string]$Json, [int]$WaitMs = 2000) {
-    $proc.StandardInput.WriteLine($Json)
-    $proc.StandardInput.Flush()
+    $stdin.WriteLine($Json)
     Start-Sleep -Milliseconds $WaitMs
     return $proc.StandardOutput.ReadLine()
 }
@@ -83,6 +94,7 @@ try {
     exit 0
 }
 finally {
+    $stdin.Dispose()
     if (-not $proc.HasExited) {
         $proc.Kill()
     }
