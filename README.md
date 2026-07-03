@@ -104,6 +104,14 @@ invocations (zwslc's own or the real wslc.exe's) even though the session
 itself is new every time — verified by pulling, tagging, and listing across
 three separate process runs.
 
+> **Note:** only one process can have that storage open at a time. The real
+> `wslc.exe` keeps its VM running in the background after use — confirmed
+> empirically to *not* idle out on its own within at least an hour — and the
+> public WSL container SDK has no API to attach to or share an
+> already-running session (`WslcCreateSession` always creates a new one;
+> there's no `WslcOpenSession`/`WslcListSessions`). If `zwslc` reports the
+> storage is in use, run `wslc system session terminate` first.
+
 ## MCP server
 
 `zig-out/bin/zwslc-mcp.exe` (see `packages/wslc-mcp/`) is a long-lived [Model
