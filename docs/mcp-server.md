@@ -28,6 +28,15 @@ SDK, provides that continuity, and only within this one server process.
 tools see and share the exact same images as the real tool and `zwslc`
 itself - not a third, disconnected image store.
 
+> **Note:** only one process can have that storage open at a time, and
+> there's no SDK-level way around it - `WslcCreateSession` always creates a
+> new session (there's no `WslcOpenSession`/`WslcListSessions` to attach to
+> an existing one). The real `wslc.exe` keeps its VM running in the
+> background after use - confirmed empirically to *not* idle out on its own
+> within at least an hour - so a tool call that fails with a sharing
+> violation likely means a `wslc.exe` session is still warm; run `wslc
+> system session terminate` first.
+
 ## Running it
 
 ```

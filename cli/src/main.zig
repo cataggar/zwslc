@@ -51,10 +51,13 @@ pub fn defaultSession(gpa: std.mem.Allocator, arena: std.mem.Allocator, environ:
     }) catch |err| {
         if (err == error.SharingViolation) {
             std.debug.print(
-                "zwslc: the WSL container session storage is in use by another process " ++
-                    "(e.g. a 'wslc' session left running in the background - real wslc.exe " ++
-                    "keeps its VM warm after use). Wait a moment and try again, or run " ++
-                    "'wslc system session terminate' to free it.\n",
+                "zwslc: the WSL container session storage is in use by another process - " ++
+                    "most likely a 'wslc' session left running in the background (the real " ++
+                    "wslc.exe keeps its VM warm indefinitely after use, not just briefly - " ++
+                    "confirmed empirically, it doesn't idle out on its own within at least an " ++
+                    "hour). The public WSL container SDK has no way for zwslc to attach to or " ++
+                    "share that already-running session, so run 'wslc system session " ++
+                    "terminate' first, then retry.\n",
                 .{},
             );
         } else {
