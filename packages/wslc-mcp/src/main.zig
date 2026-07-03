@@ -14,6 +14,7 @@ const mcp = @import("mcp");
 const context_mod = @import("context.zig");
 const version_tools = @import("tools/version.zig");
 const image_tools = @import("tools/images.zig");
+const container_tools = @import("tools/containers.zig");
 
 pub const AppContext = context_mod.AppContext;
 
@@ -30,8 +31,10 @@ pub fn main(init: std.process.Init) !void {
 
     try version_tools.register(&server);
     try image_tools.register(&server, &ctx);
-    // TODO(#2): register image mutation + container tools here as they land
-    // (passing `&ctx` for session/registry access).
+    try container_tools.register(&server, &ctx);
+    // TODO(#2): register detached create/start/status/stop/delete + logs/exec
+    // container tools here as they land (passing `&ctx` for session/registry
+    // access).
 
     try server.run(init.io, init.gpa, .stdio);
 }
