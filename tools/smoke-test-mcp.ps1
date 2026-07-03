@@ -53,20 +53,21 @@ $psi.RedirectStandardError = $true
 $psi.UseShellExecute = $false
 $proc = [System.Diagnostics.Process]::Start($psi)
 
-# Wrap stdin with an explicit, BOM-less UTF-8 StreamWriter: relying on
-# ProcessStartInfo's default input encoding is not reliable across
-# PowerShell versions/OS locales (StandardInputEncoding also isn't even
-# available on Windows PowerShell 5.1's older .NET Framework) - a stray BOM
-# prepended to the first written line is valid JSON to some parsers but not
-# others, and was observed causing a real JSON-RPC "Parse error" response
-# on a GitHub-hosted Windows runner (never reproduced locally) before this
-# fix.
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$stdin = New-Object System.IO.StreamWriter($proc.StandardInput.BaseStream, $utf8NoBom)
-$stdin.AutoFlush = $true
+# Write raw UTF-8 bytes directly to the underlying stdin stream - no
+# StreamWriter involved at all, so there's no ambiguity about a preamble/BOM
+# being auto-emitted on first write (observed as a real, CI-only JSON-RPC
+# "Parse error" on the very first, pure-ASCII request - never reproduced
+# locally with either powershell.exe or pwsh.exe, and not fixed by an
+# explicitly-constructed no-BOM StreamWriter, so something about merely
+# touching Process.StandardInput's own StreamWriter/BaseStream still wrote
+# extra bytes first). Encoding.UTF8.GetBytes() never includes a BOM (only
+# Encoding.UTF8.GetPreamble() does), unlike a StreamWriter which can.
+$stdinStream = $proc.StandardInput.BaseStream
 
 function Send-Request([string]$Json, [int]$WaitMs = 2000) {
-    $stdin.WriteLine($Json)
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Json + "`n")
+    $stdinStream.Write($bytes, 0, $bytes.Length)
+    $stdinStream.Flush()
     Start-Sleep -Milliseconds $WaitMs
     return $proc.StandardOutput.ReadLine()
 }
@@ -74,7 +75,8 @@ function Send-Request([string]$Json, [int]$WaitMs = 2000) {
 try {
     $initResponse = Send-Request '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.0.1"}}}'
     if ($null -eq $initResponse -or $initResponse -notmatch '"zwslc-mcp"') {
-        Write-Error "smoke-test-mcp FAILED: unexpected 'initialize' response: $initResponse"
+        $bytes = if ($null -ne $initResponse) { ($initResponse.ToCharArray() | ForEach-Object { [int]$_ }) -join ',' } else { '<null>' }
+        Write-Error "smoke-test-mcp FAILED: unexpected 'initialize' response: $initResponse (char codes: $bytes)"
         exit 1
     }
 
@@ -94,7 +96,6 @@ try {
     exit 0
 }
 finally {
-    $stdin.Dispose()
     if (-not $proc.HasExited) {
         $proc.Kill()
     }
