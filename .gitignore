@@ -2,3 +2,4 @@
 zig-out/
 *.pdb
 .wslc-sdk-cache/
+zig-pkg/

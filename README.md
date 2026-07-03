@@ -16,8 +16,9 @@ lesson about pointer lifetimes that isn't documented in `wslcsdk.h` itself).
 ```
 zwslc/
   build.zig               # top-level build graph; also fetches the real SDK (see below)
-  build.zig.zon           # package manifest (no build.zig.zon deps - see tools/fetch-sdk.ps1)
+  build.zig.zon           # package manifest (mcp is the only build.zig.zon dep - see tools/fetch-sdk.ps1)
   tools/fetch-sdk.ps1      # downloads/extracts the Microsoft.WSL.Containers NuGet package
+  tools/smoke-test-mcp.ps1 # spawns the built zwslc-mcp.exe and checks tools/list over real STDIO
   packages/
     wslc-sys/src/root.zig  # raw, ABI-exact extern bindings to wslcsdk.h (60 functions,
                            # 15 structs, 15 enums, 5 callbacks, 16 error codes) + the
@@ -27,12 +28,20 @@ zwslc/
       container.zig         #   Container + ContainerSettings
       process.zig           #   Process + ProcessSettings + stdioCallback/exitCallback
       strings.zig           #   shared PCSTR/PCWSTR marshaling helpers
+    wslc-mcp/src/          # the `zwslc-mcp` MCP server (see docs/mcp-server.md)
+      main.zig               #   server startup + tool registration
+      context.zig             #   AppContext: shared lazy Session + Registry
+      registry.zig            #   in-memory container registry (what makes this more than "the CLI as tools")
+      tools/version.zig       #   get_version / get_missing_components
+      tools/images.zig        #   pull/list/tag/push/delete_image
+      tools/containers.zig    #   run/create/start/status/stop/delete_container, exec_in_container, container_logs
   cli/src/                 # the `zwslc` executable
     main.zig                #   arg parsing + dispatch
     container_cmds.zig      #   run / container ls
     image_cmds.zig           #   pull / images / tag / push / rmi
   samples/end_to_end/       # Zig port of Microsoft's documented C end-to-end example
   docs/comptime-design.md   # the five comptime techniques used, + the lifetime lesson
+  docs/mcp-server.md       # zwslc-mcp tool reference, safety boundary, registry lifetime
 ```
 
 Tests live inline in each package's source files (`zig build test` runs all of them).
@@ -48,11 +57,13 @@ Tests live inline in each package's source files (`zig build test` runs all of t
 
 ```
 zig build fetch-sdk   # one-time: download/extract wslcsdk.h/.lib/.dll (also runs automatically)
-zig build             # build all packages + the zwslc CLI -> zig-out/bin/zwslc.exe
+zig build             # build all packages + zwslc/zwslc-mcp -> zig-out/bin/{zwslc.exe,zwslc-mcp.exe}
 zig build test        # run tests (struct/ABI/flag/error-set tests need no WSL install;
                       # a handful call into the real wslcsdk.dll and need COM, which
                       # ensureComInitialized() sets up automatically)
 zig build run-sample  # run the end-to-end sample (needs the container preview enabled)
+zig build run-mcp     # run zwslc-mcp (the MCP server) directly over STDIO
+zig build smoke-test-mcp  # spawn the installed zwslc-mcp.exe and check tools/list over real STDIO
 ```
 
 > You may see a `warning(link): unexpected LLD stderr` about a "skipped imported
@@ -76,6 +87,17 @@ durably under that path, `pull`/`images`/`tag`/`push`/`rmi` see the same
 images across separate invocations even though the session itself is new
 every time — verified by pulling, tagging, and listing across three separate
 process runs.
+
+## MCP server
+
+`zig-out/bin/zwslc-mcp.exe` (see `packages/wslc-mcp/`) is a long-lived [Model
+Context Protocol](https://modelcontextprotocol.io/docs/getting-started/intro)
+server exposing the same SDK as structured tools for AI agents, using
+[cataggar/mcp.zig](https://github.com/cataggar/mcp.zig) — built to make
+`container_status`/`stop_container`/`container_logs`/etc. work meaningfully
+across separate tool calls, unlike the stateless CLI. See
+[`docs/mcp-server.md`](docs/mcp-server.md) for the full tool reference,
+safety-boundary note, and registry-lifetime caveats.
 
 ## Scope: what's implemented vs. not supported
 

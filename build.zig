@@ -104,6 +104,54 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
     run_cli_tests.addPathDir(sdk_native_dir);
 
+    // ---- wslc-mcp: the `zwslc-mcp` MCP server executable ----
+    const mcp_dep = b.dependency("mcp", .{ .target = target, .optimize = optimize });
+    const mcp_exe = b.addExecutable(.{
+        .name = "zwslc-mcp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("packages/wslc-mcp/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "wslc", .module = wslc_mod },
+                .{ .name = "mcp", .module = mcp_dep.module("mcp") },
+            },
+        }),
+    });
+    mcp_exe.step.dependOn(&fetch_sdk.step);
+    b.installArtifact(mcp_exe);
+    const install_mcp_dll = b.addInstallFileWithDir(b.path(sdk_dll_path), .bin, "wslcsdk.dll");
+    install_mcp_dll.step.dependOn(&fetch_sdk.step);
+    b.getInstallStep().dependOn(&install_mcp_dll.step);
+
+    const run_mcp_cmd = b.addRunArtifact(mcp_exe);
+    run_mcp_cmd.addPathDir(sdk_native_dir);
+    run_mcp_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_mcp_cmd.addArgs(args);
+    const run_mcp_step = b.step("run-mcp", "Run zwslc-mcp (STDIO MCP server)");
+    run_mcp_step.dependOn(&run_mcp_cmd.step);
+
+    const mcp_tests = b.addTest(.{ .root_module = mcp_exe.root_module });
+    mcp_tests.step.dependOn(&fetch_sdk.step);
+    const run_mcp_tests = b.addRunArtifact(mcp_tests);
+    run_mcp_tests.addPathDir(sdk_native_dir);
+
+    // ---- smoke-test-mcp: black-box STDIO test of the *installed* zwslc-mcp.exe ----
+    // Unlike `mcp_tests` above (a `zig test` binary compiled from the same
+    // source, exercising Zig-level unit tests), this spawns the real
+    // installed executable as a subprocess and talks real JSON-RPC over its
+    // STDIO transport - the same way an actual MCP client would. See
+    // tools/smoke-test-mcp.ps1 for why this is PowerShell rather than Zig
+    // (avoids depending on Zig 0.16's still-evolving std.Io subprocess API
+    // for a test that's inherently just "does the real binary work").
+    const smoke_test_mcp = b.addSystemCommand(&.{ "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File" });
+    smoke_test_mcp.addFileArg(b.path("tools/smoke-test-mcp.ps1"));
+    smoke_test_mcp.addArg("-ExePath");
+    smoke_test_mcp.addArg(b.getInstallPath(.bin, "zwslc-mcp.exe"));
+    smoke_test_mcp.step.dependOn(b.getInstallStep());
+    const smoke_test_mcp_step = b.step("smoke-test-mcp", "Spawn the installed zwslc-mcp.exe and verify its tools/list over real STDIO");
+    smoke_test_mcp_step.dependOn(&smoke_test_mcp.step);
+
     // ---- samples/end_to_end: Zig port of Microsoft's documented C sample ----
     const sample_exe = b.addExecutable(.{
         .name = "end_to_end",
@@ -129,4 +177,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_wslc_sys_tests.step);
     test_step.dependOn(&run_wslc_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_mcp_tests.step);
 }

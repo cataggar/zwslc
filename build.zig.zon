@@ -4,12 +4,19 @@
     .fingerprint = 0xc8ec5516e234fbf4,
     .minimum_zig_version = "0.16.0",
 
-    // No `build.zig.zon` dependencies: the WSL container SDK (wslcsdk.h /
-    // wslcsdk.lib / wslcsdk.dll) is fetched by `tools/fetch-sdk.ps1` (invoked
-    // automatically by `build.zig`) rather than through Zig's package manager,
-    // because the NuGet flat-container URL ends in `.nupkg`, which `zig fetch`
-    // does not recognize as an archive format. See that script for details.
-    .dependencies = .{},
+    // The WSL container SDK (wslcsdk.h / wslcsdk.lib / wslcsdk.dll) is fetched
+    // by `tools/fetch-sdk.ps1` (invoked automatically by `build.zig`) rather
+    // than through Zig's package manager, because the NuGet flat-container
+    // URL ends in `.nupkg`, which `zig fetch` does not recognize as an
+    // archive format. See that script for details. `mcp` below (used by
+    // packages/wslc-mcp) is this repo's first real `build.zig.zon` dependency
+    // - a normal git dependency, fetched the ordinary way.
+    .dependencies = .{
+        .mcp = .{
+            .url = "git+https://github.com/cataggar/mcp.zig.git#25b2ac418c5a62c48144eece0cb8b25ae0b45886",
+            .hash = "mcp-0.0.5-cIUFgwGFBACgcv5OVy2tp7Vlc47GFpUQdaErzZDRz40C",
+        },
+    },
 
     .paths = .{
         "build.zig",
