@@ -11,6 +11,19 @@ lesson about pointer lifetimes that isn't documented in `wslcsdk.h` itself).
 > **PREVIEW NOTICE:** The underlying WSL container API is in preview and subject to
 > breaking changes. This project follows suit.
 
+## Install
+
+Install pre-built binaries from GitHub Releases with [ghr](https://github.com/cataggar/ghr):
+
+```console
+$ ghr install cataggar/zwslc@v0.1.0 RWT2wp6Q5BroB9dEh2Y5zRtU6q6C/XaXx4NUeQ31MwL6N7Wk3Yg6BWV9
+```
+
+This installs both `zwslc` (the CLI) and `zwslc-mcp` (the MCP server), verifying
+the downloaded release archive against the minisign public key above before
+extracting it. See [`.github/workflows/release.yml`](.github/workflows/release.yml)
+for how releases are built and signed.
+
 ## Layout
 
 ```

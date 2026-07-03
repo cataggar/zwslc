@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const wslc = @import("wslc");
+const build_options = @import("build_options");
 const container_cmds = @import("container_cmds.zig");
 const image_cmds = @import("image_cmds.zig");
 
@@ -133,7 +134,7 @@ fn cmdVersion() !u8 {
         std.debug.print("zwslc: failed to query WSL container SDK version: {s}\n", .{@errorName(err)});
         return 1;
     };
-    std.debug.print("zwslc 0.0.0 (wslcsdk {d}.{d}.{d})\n", .{ v.major, v.minor, v.revision });
+    std.debug.print("zwslc {s} (wslcsdk {d}.{d}.{d})\n", .{ build_options.version, v.major, v.minor, v.revision });
     return 0;
 }
 

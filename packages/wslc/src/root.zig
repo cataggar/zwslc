@@ -59,6 +59,7 @@ pub fn installWithDependencies(progress_callback: sys.WslcInstallCallback, conte
 }
 
 test "wslc.getVersion links through to the real SDK" {
+    if (!@import("build_options").test_real_sdk) return error.SkipZigTest;
     const v = try getVersion();
     try std.testing.expect(v.major >= 2);
 }
