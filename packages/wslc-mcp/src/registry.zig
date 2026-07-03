@@ -24,6 +24,11 @@ pub const Entry = struct {
     image: []u8,
     auto_remove: bool,
     created_at_ms: i64,
+    /// Accumulated stdout/stderr transcript from `exec_in_container` calls
+    /// against this container (secondary processes only - the init
+    /// process's own output isn't captured; see tools/containers.zig's
+    /// module doc comment for why). Owned by `Registry.allocator`.
+    log: std.ArrayList(u8) = .empty,
 };
 
 /// Mutex-guarded map from `ContainerId` to `Entry`. Guards concurrent MCP
@@ -73,6 +78,7 @@ pub const Registry = struct {
             entry.container.deinit();
             self.allocator.free(entry.image);
             if (entry.name) |n| self.allocator.free(n);
+            entry.log.deinit(self.allocator);
         }
         self.entries.deinit(self.allocator);
     }
@@ -120,9 +126,23 @@ pub const Registry = struct {
         return self.entries.getPtr(id);
     }
 
+    /// Appends `data` to `id`'s accumulated log transcript (see
+    /// `container_logs`), if still registered. Best-effort: silently drops
+    /// the data if `id` is no longer registered or on allocation failure -
+    /// there's no way to report an error back to an SDK stdio callback (see
+    /// `tools/containers.zig`'s `exec_in_container`, the only caller).
+    /// Thread-safe - safe to call from a context without its own lock.
+    pub fn appendLog(self: *Registry, io: std.Io, id: ContainerId, data: []const u8) void {
+        if (data.len == 0) return;
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const entry = self.entries.getPtr(id) orelse return;
+        entry.log.appendSlice(self.allocator, data) catch {};
+    }
+
     /// Removes `id` from the registry and returns ownership of its `Entry`
     /// to the caller, who becomes responsible for calling
-    /// `.container.deinit()` and freeing `.name`/`.image` via
+    /// `.container.deinit()` and freeing `.name`/`.image`/`.log` via
     /// `self.allocator`. Thread-safe.
     pub fn remove(self: *Registry, io: std.Io, id: ContainerId) ?Entry {
         self.mutex.lockUncancelable(io);

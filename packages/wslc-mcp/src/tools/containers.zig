@@ -127,6 +127,39 @@ pub fn register(server: *mcp.Server, ctx: *context.AppContext) !void {
         .user_data = ctx,
         .annotations = .{ .readOnlyHint = false, .destructiveHint = true, .idempotentHint = true },
     });
+
+    var exec_builder = mcp.schema.InputSchemaBuilder.init(ctx.gpa);
+    defer exec_builder.deinit(ctx.gpa);
+    _ = try exec_builder.addInteger(ctx.gpa, "container_id", "id returned by create_container/run_container. The container must already be RUNNING.", true);
+    _ = try exec_builder.addString(ctx.gpa, "working_directory", "Optional working directory for the new process.", false);
+    const exec_schema = try exec_builder.toInputSchema(ctx.gpa);
+
+    try server.addTool(.{
+        .name = "exec_in_container",
+        .description = "Run a command (blocking) as a new secondary process inside an already-" ++
+            "running container, and return its exit_code/stdout/stderr. Extra JSON array " ++
+            "arguments beyond the listed properties: 'cmd' (required array of strings, " ++
+            "argv), 'env' (array of 'KEY=VALUE' strings). The transcript is also appended " ++
+            "to the container's accumulated log, retrievable later via container_logs. " ++
+            "This is real code-execution capability inside the container - treat it with " ++
+            "the same care as run_container.",
+        .inputSchema = exec_schema,
+        .handler = execInContainer,
+        .user_data = ctx,
+        .annotations = .{ .readOnlyHint = false, .destructiveHint = true, .idempotentHint = false },
+    });
+
+    try server.addTool(.{
+        .name = "container_logs",
+        .description = "Get the accumulated stdout/stderr transcript from all exec_in_container " ++
+            "calls made against a container in this server session. Does not include the " ++
+            "container's own init-process output (not forwarded - see run_container's " ++
+            "description).",
+        .inputSchema = try containerIdSchema(ctx.gpa),
+        .handler = containerLogs,
+        .user_data = ctx,
+        .annotations = .{ .readOnlyHint = true, .destructiveHint = false, .idempotentHint = true },
+    });
 }
 
 fn containerIdSchema(gpa: std.mem.Allocator) !mcp.types.InputSchema {
@@ -317,9 +350,138 @@ fn deleteContainer(user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Alloca
     entry.container.deinit();
     ctx.registry.allocator.free(entry.image);
     if (entry.name) |n| ctx.registry.allocator.free(n);
+    entry.log.deinit(ctx.registry.allocator);
 
     return tools.textResult(allocator, "deleted") catch tools.ToolError.OutOfMemory;
 }
+
+fn execInContainer(user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) tools.ToolError!tools.ToolResult {
+    const ctx: *context.AppContext = @ptrCast(@alignCast(user_data.?));
+    const id = getContainerId(args) orelse return tools.ToolError.InvalidArguments;
+    const cmd = stringArrayArg(allocator, args, "cmd") orelse return tools.ToolError.InvalidArguments;
+    if (cmd.len == 0) return tools.ToolError.InvalidArguments;
+    const env = stringArrayArg(allocator, args, "env") orelse return tools.ToolError.InvalidArguments;
+    const working_directory = tools.getString(args, "working_directory");
+
+    // Look up (and copy - `wslc.Container` is just a handle + optional
+    // arena pointer) the container without holding the registry lock for
+    // the whole (possibly slow) blocking exec below; only the lookup
+    // itself needs the lock.
+    const container = blk: {
+        ctx.registry.lock(io);
+        defer ctx.registry.unlock(io);
+        const entry = ctx.registry.getAssumeLocked(id) orelse return tools.ToolError.ResourceNotFound;
+        break :blk entry.container;
+    };
+
+    // A manual-reset Win32 event, set by `ExecCtx.onExit` below. Waiting on
+    // *this* (rather than `proc.waitForExit()`, which waits on the SDK's
+    // own exit *event* and can observe it before all stdio callbacks have
+    // fired) is required for correctness: `WslcProcessExitCallback`'s doc
+    // comment guarantees it only fires "when a process has exited AND any
+    // remaining IO has been flushed" - only that guarantee makes it safe to
+    // read `exec_ctx.stdout`/`stderr` below as complete.
+    const exited_event = CreateEventW(null, 1, 0, null) orelse return tools.ToolError.ExecutionFailed;
+    defer _ = CloseHandle(exited_event);
+
+    // `exec_ctx` is stack-local and outlives every point where WSLC could
+    // invoke its callbacks (from `createProcess` through the
+    // `WaitForSingleObject` below returning, all within this same
+    // synchronous call) - see this file's module doc comment for why a
+    // *secondary* process (unlike the container's init process) can safely
+    // use callbacks here.
+    var exec_ctx = ExecCtx{ .allocator = allocator, .exited = exited_event };
+    defer exec_ctx.stdout.deinit(allocator);
+    defer exec_ctx.stderr.deinit(allocator);
+    const on_stdio = wslc.stdioCallback(ExecCtx, ExecCtx.onData);
+    const on_exit = wslc.exitCallback(ExecCtx, ExecCtx.onExit);
+
+    var proc = container.createProcess(allocator, .{
+        .working_directory = working_directory,
+        .cmd_line = cmd,
+        .env_variables = env,
+        .callbacks = .{ .onStdOut = on_stdio, .onStdErr = on_stdio, .onExit = on_exit },
+        .callbacks_context = &exec_ctx,
+    }) catch return tools.ToolError.ExecutionFailed;
+    defer proc.deinit();
+
+    _ = WaitForSingleObject(exited_event, INFINITE);
+    const exit_code: i64 = exec_ctx.exit_code;
+
+    // Append this exec's transcript to the container's accumulated log
+    // (see container_logs) before exec_ctx's buffers are freed below.
+    if (exec_ctx.stdout.items.len != 0) {
+        if (std.fmt.allocPrint(allocator, "[stdout] {s}\n", .{exec_ctx.stdout.items})) |tagged| {
+            defer allocator.free(tagged);
+            ctx.registry.appendLog(io, id, tagged);
+        } else |_| {}
+    }
+    if (exec_ctx.stderr.items.len != 0) {
+        if (std.fmt.allocPrint(allocator, "[stderr] {s}\n", .{exec_ctx.stderr.items})) |tagged| {
+            defer allocator.free(tagged);
+            ctx.registry.appendLog(io, id, tagged);
+        } else |_| {}
+    }
+
+    // Independent copies (not slices into `exec_ctx`'s buffers, which the
+    // `defer`s above free as this function returns).
+    const stdout_copy = allocator.dupe(u8, exec_ctx.stdout.items) catch return tools.ToolError.OutOfMemory;
+    const stderr_copy = allocator.dupe(u8, exec_ctx.stderr.items) catch return tools.ToolError.OutOfMemory;
+
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(allocator, "exit_code", .{ .integer = exit_code }) catch return tools.ToolError.OutOfMemory;
+    obj.put(allocator, "stdout", .{ .string = stdout_copy }) catch return tools.ToolError.OutOfMemory;
+    obj.put(allocator, "stderr", .{ .string = stderr_copy }) catch return tools.ToolError.OutOfMemory;
+    return tools.structuredResult(allocator, .{ .object = obj }) catch tools.ToolError.OutOfMemory;
+}
+
+fn containerLogs(user_data: ?*anyopaque, io: std.Io, allocator: std.mem.Allocator, args: ?std.json.Value) tools.ToolError!tools.ToolResult {
+    const ctx: *context.AppContext = @ptrCast(@alignCast(user_data.?));
+    const id = getContainerId(args) orelse return tools.ToolError.InvalidArguments;
+
+    ctx.registry.lock(io);
+    defer ctx.registry.unlock(io);
+    const entry = ctx.registry.getAssumeLocked(id) orelse return tools.ToolError.ResourceNotFound;
+    // `textResult` dupes `entry.log.items` into `allocator` before we
+    // unlock, so the returned text is independent of the registry's buffer.
+    return tools.textResult(allocator, entry.log.items) catch tools.ToolError.OutOfMemory;
+}
+
+/// Accumulates stdout/stderr from a single `exec_in_container` call, and
+/// signals `exited` (a Win32 event, set by `onExit`) once WSLC guarantees
+/// all IO has been flushed - see `execInContainer`'s comment on why this
+/// (not `Process.waitForExit`) is what's actually safe to wait on here.
+/// Passed as the `WslcProcessCallbacks` context for a *secondary* process
+/// (via `Container.createProcess`) - unlike the container's init process,
+/// this doesn't hit the `E_INVALIDARG` bug noted in this file's module doc
+/// comment.
+const ExecCtx = struct {
+    allocator: std.mem.Allocator,
+    exited: wslc.sys.HANDLE,
+    exit_code: i32 = -1,
+    stdout: std.ArrayList(u8) = .empty,
+    stderr: std.ArrayList(u8) = .empty,
+
+    fn onData(self: *ExecCtx, io_handle: wslc.sys.WslcProcessIOHandle, data: []const u8) void {
+        const buf = switch (io_handle) {
+            .STDOUT => &self.stdout,
+            .STDERR => &self.stderr,
+            else => return,
+        };
+        buf.appendSlice(self.allocator, data) catch {};
+    }
+
+    fn onExit(self: *ExecCtx, exit_code: i32) void {
+        self.exit_code = exit_code;
+        _ = SetEvent(self.exited);
+    }
+};
+
+const INFINITE: u32 = 0xFFFFFFFF;
+extern "kernel32" fn CreateEventW(event_attrs: ?*anyopaque, manual_reset: i32, initial_state: i32, name: ?[*:0]const u16) callconv(.winapi) wslc.sys.HANDLE;
+extern "kernel32" fn SetEvent(handle: wslc.sys.HANDLE) callconv(.winapi) i32;
+extern "kernel32" fn CloseHandle(handle: wslc.sys.HANDLE) callconv(.winapi) i32;
+extern "kernel32" fn WaitForSingleObject(handle: wslc.sys.HANDLE, milliseconds: u32) callconv(.winapi) u32;
 
 fn parseSignal(s: []const u8) ?wslc.sys.WslcSignal {
     if (std.mem.eql(u8, s, "SIGTERM")) return .SIGTERM;
