@@ -104,6 +104,38 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
     run_cli_tests.addPathDir(sdk_native_dir);
 
+    // ---- wslc-mcp: the `zwslc-mcp` MCP server executable ----
+    const mcp_dep = b.dependency("mcp", .{ .target = target, .optimize = optimize });
+    const mcp_exe = b.addExecutable(.{
+        .name = "zwslc-mcp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("packages/wslc-mcp/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "wslc", .module = wslc_mod },
+                .{ .name = "mcp", .module = mcp_dep.module("mcp") },
+            },
+        }),
+    });
+    mcp_exe.step.dependOn(&fetch_sdk.step);
+    b.installArtifact(mcp_exe);
+    const install_mcp_dll = b.addInstallFileWithDir(b.path(sdk_dll_path), .bin, "wslcsdk.dll");
+    install_mcp_dll.step.dependOn(&fetch_sdk.step);
+    b.getInstallStep().dependOn(&install_mcp_dll.step);
+
+    const run_mcp_cmd = b.addRunArtifact(mcp_exe);
+    run_mcp_cmd.addPathDir(sdk_native_dir);
+    run_mcp_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_mcp_cmd.addArgs(args);
+    const run_mcp_step = b.step("run-mcp", "Run zwslc-mcp (STDIO MCP server)");
+    run_mcp_step.dependOn(&run_mcp_cmd.step);
+
+    const mcp_tests = b.addTest(.{ .root_module = mcp_exe.root_module });
+    mcp_tests.step.dependOn(&fetch_sdk.step);
+    const run_mcp_tests = b.addRunArtifact(mcp_tests);
+    run_mcp_tests.addPathDir(sdk_native_dir);
+
     // ---- samples/end_to_end: Zig port of Microsoft's documented C sample ----
     const sample_exe = b.addExecutable(.{
         .name = "end_to_end",
@@ -129,4 +161,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_wslc_sys_tests.step);
     test_step.dependOn(&run_wslc_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_mcp_tests.step);
 }
