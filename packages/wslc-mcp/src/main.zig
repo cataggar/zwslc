@@ -11,9 +11,11 @@
 
 const std = @import("std");
 const mcp = @import("mcp");
-const registry_mod = @import("registry.zig");
+const context_mod = @import("context.zig");
+const version_tools = @import("tools/version.zig");
+const image_tools = @import("tools/images.zig");
 
-pub const Registry = registry_mod.Registry;
+pub const AppContext = context_mod.AppContext;
 
 pub fn main(init: std.process.Init) !void {
     var server = mcp.Server.init(init.gpa, .{
@@ -23,17 +25,19 @@ pub fn main(init: std.process.Init) !void {
     });
     defer server.deinit();
 
-    var registry = Registry.init(init.gpa);
-    defer registry.deinit();
+    var ctx = AppContext.init(init.gpa, init.environ_map);
+    defer ctx.deinit();
 
-    // TODO(#2): register version/image/container tools here as they land
-    // (passing `&registry` to the container-lifecycle ones).
+    try version_tools.register(&server);
+    try image_tools.register(&server, &ctx);
+    // TODO(#2): register image mutation + container tools here as they land
+    // (passing `&ctx` for session/registry access).
 
     try server.run(init.io, init.gpa, .stdio);
 }
 
 test {
-    // Pull in registry.zig's own tests too (see packages/wslc/src/root.zig
-    // for the same pattern).
+    // Pull in registry.zig/context.zig's own tests too (see
+    // packages/wslc/src/root.zig for the same pattern).
     std.testing.refAllDecls(@This());
 }
