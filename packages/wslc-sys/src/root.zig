@@ -154,6 +154,14 @@ const generic_errors = [_]ErrorEntry{
     .{ .name = "Pointer", .hr = @bitCast(@as(u32, 0x80004003)) }, // E_POINTER
     .{ .name = "Aborted", .hr = @bitCast(@as(u32, 0x80004004)) }, // E_ABORT
     .{ .name = "Handle", .hr = @bitCast(@as(u32, 0x80070006)) }, // E_HANDLE
+    // HRESULT_FROM_WIN32(ERROR_SHARING_VIOLATION) - returned by
+    // WslcCreateSession when another process (e.g. a still-running `wslc`
+    // session left warm in the background - confirmed by inspecting
+    // `vmmemwslc-cli-<user>`/`wslcsession.exe` processes) has the storage
+    // path's backing VHDX exclusively locked. Realistic and expected now
+    // that zwslc shares storage with the real wslc.exe, not just a
+    // hypothetical edge case.
+    .{ .name = "SharingViolation", .hr = @bitCast(@as(u32, 0x80070020)) },
 };
 
 const all_errors = domain_errors ++ generic_errors;
@@ -192,6 +200,7 @@ pub const Error = error{
     Pointer,
     Aborted,
     Handle,
+    SharingViolation,
     Unknown,
 };
 

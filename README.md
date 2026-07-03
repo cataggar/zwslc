@@ -94,12 +94,15 @@ zwslc tag alpine:latest myrepo/myalpine:v1
 zwslc rmi myrepo/myalpine:v1
 ```
 
-Every invocation creates a fresh `WslcSession` against a fixed, per-machine
-storage path (`%LOCALAPPDATA%\zwslc\storage`). Since WSLC images are stored
-durably under that path, `pull`/`images`/`tag`/`push`/`rmi` see the same
-images across separate invocations even though the session itself is new
-every time — verified by pulling, tagging, and listing across three separate
-process runs.
+Every invocation creates a fresh `WslcSession` against the **same session
+storage the real `wslc.exe` CLI uses** for its default session
+(`%LOCALAPPDATA%\wslc\sessions\wslc-cli-<username>`), so `zwslc`'s images and
+containers are the same ones you'd see from the real tool — no separate,
+disconnected image store. Since WSLC images are stored durably under that
+path, `pull`/`images`/`tag`/`push`/`rmi` see the same images across separate
+invocations (zwslc's own or the real wslc.exe's) even though the session
+itself is new every time — verified by pulling, tagging, and listing across
+three separate process runs.
 
 ## MCP server
 
