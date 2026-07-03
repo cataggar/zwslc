@@ -9,6 +9,15 @@ const sdk_version = "2.9.3";
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Version string embedded in `zwslc version`/the MCP server's
+    // serverInfo - set by CI release builds via `-Dversion=<tag minus v>`
+    // (matches ../wabt's release.yml convention). `build.zig.zon`'s own
+    // `.version` field is separate package-manager metadata, bumped by hand.
+    const version = b.option([]const u8, "version", "Version string embedded in zwslc/zwslc-mcp output") orelse "0.0.0-dev";
+    const strip = b.option(bool, "strip", "Strip debug info from release binaries") orelse false;
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
 
     if (target.result.os.tag != .windows) {
         std.debug.panic(
@@ -80,11 +89,13 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("cli/src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = if (strip) true else null,
             .imports = &.{
                 .{ .name = "wslc", .module = wslc_mod },
             },
         }),
     });
+    cli_exe.root_module.addOptions("build_options", options);
     cli_exe.step.dependOn(&fetch_sdk.step);
     b.installArtifact(cli_exe);
     // Ship wslcsdk.dll next to the installed exe so `zig-out/bin/zwslc.exe` is runnable standalone.
@@ -112,12 +123,14 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("packages/wslc-mcp/src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = if (strip) true else null,
             .imports = &.{
                 .{ .name = "wslc", .module = wslc_mod },
                 .{ .name = "mcp", .module = mcp_dep.module("mcp") },
             },
         }),
     });
+    mcp_exe.root_module.addOptions("build_options", options);
     mcp_exe.step.dependOn(&fetch_sdk.step);
     b.installArtifact(mcp_exe);
     const install_mcp_dll = b.addInstallFileWithDir(b.path(sdk_dll_path), .bin, "wslcsdk.dll");

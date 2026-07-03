@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const mcp = @import("mcp");
+const build_options = @import("build_options");
 const context_mod = @import("context.zig");
 const version_tools = @import("tools/version.zig");
 const image_tools = @import("tools/images.zig");
@@ -21,7 +22,7 @@ pub const AppContext = context_mod.AppContext;
 pub fn main(init: std.process.Init) !void {
     var server = mcp.Server.init(init.gpa, .{
         .name = "zwslc-mcp",
-        .version = "0.0.0",
+        .version = build_options.version,
         .description = "MCP server exposing the WSL container SDK (packages/wslc) to AI agents.",
     });
     defer server.deinit();
