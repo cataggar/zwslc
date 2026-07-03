@@ -110,7 +110,8 @@ three separate process runs.
 > public WSL container SDK has no API to attach to or share an
 > already-running session (`WslcCreateSession` always creates a new one;
 > there's no `WslcOpenSession`/`WslcListSessions`). If `zwslc` reports the
-> storage is in use, run `wslc system session terminate` first.
+> storage is in use, run `wslc system session terminate` first. Tracked as
+> [#8](https://github.com/cataggar/zwslc/issues/8).
 
 ## MCP server
 

@@ -35,7 +35,8 @@ itself - not a third, disconnected image store.
 > background after use - confirmed empirically to *not* idle out on its own
 > within at least an hour - so a tool call that fails with a sharing
 > violation likely means a `wslc.exe` session is still warm; run `wslc
-> system session terminate` first.
+> system session terminate` first. Tracked as
+> [#8](https://github.com/cataggar/zwslc/issues/8).
 
 ## Running it
 
