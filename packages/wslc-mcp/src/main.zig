@@ -11,6 +11,9 @@
 
 const std = @import("std");
 const mcp = @import("mcp");
+const registry_mod = @import("registry.zig");
+
+pub const Registry = registry_mod.Registry;
 
 pub fn main(init: std.process.Init) !void {
     var server = mcp.Server.init(init.gpa, .{
@@ -20,7 +23,17 @@ pub fn main(init: std.process.Init) !void {
     });
     defer server.deinit();
 
-    // TODO(#2): register version/image/container tools here as they land.
+    var registry = Registry.init(init.gpa);
+    defer registry.deinit();
+
+    // TODO(#2): register version/image/container tools here as they land
+    // (passing `&registry` to the container-lifecycle ones).
 
     try server.run(init.io, init.gpa, .stdio);
+}
+
+test {
+    // Pull in registry.zig's own tests too (see packages/wslc/src/root.zig
+    // for the same pattern).
+    std.testing.refAllDecls(@This());
 }
