@@ -30,7 +30,13 @@ jobs:
         run: zig build -Doptimize=${{ matrix.optimize }}
 
       - name: Unit tests
-        run: zig build test -Doptimize=${{ matrix.optimize }}
+        # -Dtest-real-sdk=false: GitHub-hosted Windows runners don't have the
+        # WSL container feature enabled, so WslcGetVersion itself fails there
+        # (discovered empirically - not just "needs wslcsdk.dll + COM" as
+        # this repo previously assumed). Skips only that one link-smoke test
+        # pair; everything else (struct/ABI/flag/error-set tests,
+        # getMissingComponents, settings-builder tests) still runs for real.
+        run: zig build test -Doptimize=${{ matrix.optimize }} -Dtest-real-sdk=false
 
       - name: Smoke test zwslc-mcp (real STDIO round-trip)
         run: zig build smoke-test-mcp -Doptimize=${{ matrix.optimize }}

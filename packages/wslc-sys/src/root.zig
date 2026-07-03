@@ -747,6 +747,7 @@ pub extern "wslcsdk" fn WslcInstallWithDependencies(progressCallback: WslcInstal
 // ================================================================================
 
 test "link smoke test: WslcGetVersion resolves against the real wslcsdk.lib" {
+    if (!@import("build_options").test_real_sdk) return error.SkipZigTest;
     try ensureComInitialized();
     defer uninitializeCom();
     var v: WslcVersion = .{ .major = 0, .minor = 0, .revision = 0 };
