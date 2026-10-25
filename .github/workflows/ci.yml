@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Zig via ghr
-        uses: cataggar/ghr/actions/install@v0.6.1
+        uses: cataggar/ghr/actions/install@v0.9.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
